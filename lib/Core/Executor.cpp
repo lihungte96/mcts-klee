@@ -2813,6 +2813,7 @@ void Executor::run(ExecutionState &initialState) {
   // Delay init till now so that ticks don't accrue during
   // optimization and such.
   initTimers();
+
   states.insert(&initialState);
 
   if (usingSeeds) {
@@ -2888,43 +2889,8 @@ void Executor::run(ExecutionState &initialState) {
 
   std::vector<ExecutionState *> newStates(states.begin(), states.end());
   searcher->update(0, newStates, std::vector<ExecutionState *>());
-  bool go = true;
   while (!states.empty() && !haltExecution) {
     ExecutionState &state = searcher->selectState();
-    /*
-    if (go){
-    Instruction *inst = state.pc->inst;
-    BasicBlock* bb = inst->getParent();
-    std::set<BasicBlock *> bbset;
-    bbset.insert(bbset.end(),bb);
-    std::set<BasicBlock *> bbqueue;
-    std::set<BasicBlock *>::iterator it;
-    for (it = bbset.begin(); it != bbset.end(); it++){
-      //const TerminatorInst* TInst = bb -> getTerminator();
-      const TerminatorInst* TInst = (*it) -> getTerminator();
-      if (TInst->getNumSuccessors() > 0){
-        // chose random successor to simulate
-        for (int i=0; i < TInst->getNumSuccessors();i++){
-          //int chosePath = theRNG.getInt32() % (TInst->getNumSuccessors());
-          int chosePath = i;
-          klee_message("in bb %p", bb);
-          bb = TInst->getSuccessor(chosePath);
-          bbset.insert(bbset.end(),bb);
-          //bbqueue.
-        }
-        go = false;
-        //break;
-      } else {
-        klee_message("bye");
-        break;
-      }
-    }
-    klee_message("bb %p %p %p",&state, inst, bb);
-    for (it = bbset.begin(); it != bbset.end(); ++it){
-      klee_message("bbset %p", *it);
-    }
-    }*/
-    //ExecutionState &state = searcher->selectState();
     KInstruction *ki = state.pc;
     stepInstruction(state);
 
