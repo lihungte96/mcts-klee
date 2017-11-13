@@ -30,7 +30,10 @@ namespace {
 			clEnumValN(Searcher::NURS_Depth, "nurs:depth", "use NURS with 2^depth"),
 			clEnumValN(Searcher::NURS_ICnt, "nurs:icnt", "use NURS with Instr-Count"),
 			clEnumValN(Searcher::NURS_CPICnt, "nurs:cpicnt", "use NURS with CallPath-Instr-Count"),
-			clEnumValN(Searcher::NURS_QC, "nurs:qc", "use NURS with Query-Cost")
+			clEnumValN(Searcher::NURS_QC, "nurs:qc", "use NURS with Query-Cost"),
+			clEnumValN(Searcher::MCTS_Cov, "mcts", "use MCTS with sim coverage"),
+			clEnumValN(Searcher::MCTS_CovNew, "mcts:covnew", "use MCTS with Coverage-New"),
+			clEnumValN(Searcher::MCTS_CovCP, "mcts:covcp", "use MCTS with sim coverage devide by Coverage-New-Cost")
 			KLEE_LLVM_CL_VAL_END));
 
   cl::opt<bool>
@@ -69,7 +72,9 @@ bool klee::userSearcherRequiresMD2U() {
 	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::NURS_CovNew) != CoreSearch.end() ||
 	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::NURS_ICnt) != CoreSearch.end() ||
 	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::NURS_CPICnt) != CoreSearch.end() ||
-	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::NURS_QC) != CoreSearch.end());
+	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::NURS_QC) != CoreSearch.end() ||
+	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::MCTS_CovNew) != CoreSearch.end() ||
+	  std::find(CoreSearch.begin(), CoreSearch.end(), Searcher::MCTS_CovCP) != CoreSearch.end());
 }
 
 
@@ -86,6 +91,9 @@ Searcher *getNewSearcher(Searcher::CoreSearchType type, Executor &executor) {
   case Searcher::NURS_ICnt: searcher = new WeightedRandomSearcher(WeightedRandomSearcher::InstCount); break;
   case Searcher::NURS_CPICnt: searcher = new WeightedRandomSearcher(WeightedRandomSearcher::CPInstCount); break;
   case Searcher::NURS_QC: searcher = new WeightedRandomSearcher(WeightedRandomSearcher::QueryCost); break;
+  case Searcher::MCTS_Cov: searcher = new MCTSSearcher(executor, MCTSSearcher::Coverage); break;
+  case Searcher::MCTS_CovNew: searcher = new MCTSSearcher(executor, MCTSSearcher::CoveringNew); break;
+  case Searcher::MCTS_CovCP: searcher = new MCTSSearcher(executor, MCTSSearcher::CoverageCP); break;
   }
 
   return searcher;

@@ -410,6 +410,7 @@ Executor::Executor(LLVMContext &ctx, const InterpreterOptions &opts,
                  ErrorInfo.c_str());
     }
   }
+  totalTraversedBlock = 1;
 }
 
 
@@ -1483,7 +1484,10 @@ void Executor::transferToBasicBlock(BasicBlock *dst, BasicBlock *src,
   if (state.pc->inst->getOpcode() == Instruction::PHI) {
     PHINode *first = static_cast<PHINode*>(state.pc->inst);
     state.incomingBBIndex = first->getBasicBlockIndex(src);
+    bbset.insert(src);
   }
+  bbset.insert(src);
+  state.bb = dst;
 }
 
 /// Compute the true target of a function call, resolving LLVM and KLEE aliases
@@ -2669,6 +2673,7 @@ void Executor::executeInstruction(ExecutionState &state, KInstruction *ki) {
 void Executor::updateStates(ExecutionState *current) {
   if (searcher) {
     searcher->update(current, addedStates, removedStates);
+	totalTraversedBlock += (addedStates.size() != 0) ? addedStates.size() + 1 : 0;
   }
   
   states.insert(addedStates.begin(), addedStates.end());
@@ -2808,7 +2813,6 @@ void Executor::run(ExecutionState &initialState) {
   // Delay init till now so that ticks don't accrue during
   // optimization and such.
   initTimers();
-
   states.insert(&initialState);
 
   if (usingSeeds) {
@@ -2884,9 +2888,43 @@ void Executor::run(ExecutionState &initialState) {
 
   std::vector<ExecutionState *> newStates(states.begin(), states.end());
   searcher->update(0, newStates, std::vector<ExecutionState *>());
-
+  bool go = true;
   while (!states.empty() && !haltExecution) {
     ExecutionState &state = searcher->selectState();
+    /*
+    if (go){
+    Instruction *inst = state.pc->inst;
+    BasicBlock* bb = inst->getParent();
+    std::set<BasicBlock *> bbset;
+    bbset.insert(bbset.end(),bb);
+    std::set<BasicBlock *> bbqueue;
+    std::set<BasicBlock *>::iterator it;
+    for (it = bbset.begin(); it != bbset.end(); it++){
+      //const TerminatorInst* TInst = bb -> getTerminator();
+      const TerminatorInst* TInst = (*it) -> getTerminator();
+      if (TInst->getNumSuccessors() > 0){
+        // chose random successor to simulate
+        for (int i=0; i < TInst->getNumSuccessors();i++){
+          //int chosePath = theRNG.getInt32() % (TInst->getNumSuccessors());
+          int chosePath = i;
+          klee_message("in bb %p", bb);
+          bb = TInst->getSuccessor(chosePath);
+          bbset.insert(bbset.end(),bb);
+          //bbqueue.
+        }
+        go = false;
+        //break;
+      } else {
+        klee_message("bye");
+        break;
+      }
+    }
+    klee_message("bb %p %p %p",&state, inst, bb);
+    for (it = bbset.begin(); it != bbset.end(); ++it){
+      klee_message("bbset %p", *it);
+    }
+    }*/
+    //ExecutionState &state = searcher->selectState();
     KInstruction *ki = state.pc;
     stepInstruction(state);
 
@@ -2897,6 +2935,8 @@ void Executor::run(ExecutionState &initialState) {
 
     updateStates(&state);
   }
+
+  getHandler().getInfoStream() << "total traversed block " << totalTraversedBlock << " bbset size " << bbset.size() << '\n';
 
   delete searcher;
   searcher = 0;
@@ -2986,6 +3026,7 @@ void Executor::terminateStateEarly(ExecutionState &state,
       (AlwaysOutputSeeds && seedMap.count(&state)))
     interpreterHandler->processTestCase(state, (message + "\n").str().c_str(),
                                         "early");
+  //totalTraversedBlock--;
   terminateState(state);
 }
 
@@ -2994,6 +3035,7 @@ void Executor::terminateStateOnExit(ExecutionState &state) {
       (AlwaysOutputSeeds && seedMap.count(&state)))
     interpreterHandler->processTestCase(state, 0, 0);
   terminateState(state);
+  bbset.insert(state.pc->inst->getParent());
 }
 
 const InstructionInfo & Executor::getLastNonKleeInternalInstruction(const ExecutionState &state,

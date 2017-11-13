@@ -15,6 +15,9 @@
 #include <set>
 #include <map>
 #include <queue>
+#include "MCTS.h"
+
+#include "llvm/IR/BasicBlock.h"
 
 namespace llvm {
   class BasicBlock;
@@ -76,7 +79,10 @@ namespace klee {
       NURS_Depth,
       NURS_ICnt,
       NURS_CPICnt,
-      NURS_QC
+      NURS_QC,
+      MCTS_Cov,
+      MCTS_CovNew,
+      MCTS_CovCP
     };
   };
 
@@ -296,6 +302,46 @@ namespace klee {
            it != ie; ++it)
         (*it)->printName(os);
       os << "</InterleavedSearcher>\n";
+    }
+  };
+
+  class MCTSSearcher : public Searcher {
+  public:
+    enum MCTSType {
+      Coverage,
+      CoveringNew,
+      CoverageCP
+    };
+
+  private:
+    llvm::raw_ostream *aa;
+    MCTSType type;
+    klee::MCTSTree tree;
+    float taken_time;
+    bool one = true;
+    ExecutionState *firstState;
+    Executor &executor;
+
+  public:
+    MCTSSearcher(Executor &executor, MCTSType _type);
+    ~MCTSSearcher();
+    ExecutionState &selectState();
+    //void go(BasicBlock *bb, std::set<BasicBlock *> bbset);
+    void update(ExecutionState *current,
+                const std::vector<ExecutionState *> &addedStates,
+                const std::vector<ExecutionState *> &removedStates);
+    void add_child(ExecutionState *state);
+    int _simulate_future (ExecutionState *state);
+    bool empty() { return tree.count_living_node() == 0; }
+    void printName(llvm::raw_ostream &os) {
+      aa = &os;
+      os << "MCTSSearcher:";
+      switch(type) {
+        case Coverage           : os << "Coverage\n"; return;
+        case CoveringNew        : os << "CoveringNew\n"; return;
+        case CoverageCP         : os << "CoverageCP\n"; return;
+        default                 : os << "<unknown type>\n"; return;
+      }
     }
   };
 

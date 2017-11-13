@@ -118,6 +118,9 @@ public:
     Unhandled
   };
 
+  /// Total BasicBlock been traversed by KLEE
+  std::set<llvm::BasicBlock*> bbset;
+
 private:
   static const char *TerminateReasonNames[];
 
@@ -199,6 +202,9 @@ private:
   /// The maximum time to allow for a single core solver query.
   /// (e.g. for a single STP query)
   double coreSolverTimeout;
+
+  /// Total block been traversed by KLEE
+  unsigned totalTraversedBlock;
 
   /// Assumes ownership of the created array objects
   ArrayCache arrayCache;

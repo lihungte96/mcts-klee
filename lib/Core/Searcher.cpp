@@ -646,3 +646,372 @@ void InterleavedSearcher::update(
          ie = searchers.end(); it != ie; ++it)
     (*it)->update(current, addedStates, removedStates);
 }
+
+MCTSSearcher::MCTSSearcher(Executor &_executor, MCTSType _type):executor(_executor){
+  tree = MCTSTree();
+  type = _type;
+}
+
+MCTSSearcher::~MCTSSearcher(){
+}
+
+ExecutionState &MCTSSearcher::selectState() {
+  // return ExecutionState ,which is has max coverage
+  if ((tree.current->state == NULL)) {
+    //std::set<BasicBlock*> bbset;
+    //std::set<BasicBlock*> bbqueue;
+    BasicBlock *bb = firstState->bb;
+    // *aa << "add" << " " << firstState << " " << firstState->bb << '\n';
+    //go(bb,bbset);
+  }
+  MCTSNode* node = tree.select_node();
+  return *(node->state);
+}
+/*void MCTSSearcher::go (BasicBlock *bb, std::set<BasicBlock*> bbset) {
+	while (bb != NULL){
+        if(bbset.find(bb) != bbset.end()) {
+          break;
+        } else {
+          bbset.insert(bb);
+          if (bbset.size()%10==0){
+            *aa << "temp size " << bbset.size() << '\n';
+            (*aa).flush();
+          }
+        }
+        const TerminatorInst* TInst = bb->getTerminator();
+        if (TInst->getNumSuccessors() > 0){
+          for (unsigned int i =0; i < TInst->getNumSuccessors(); i++){
+            go(TInst->getSuccessor(i),bbset);
+          }
+        }
+        else
+          break;
+    }
+}*/
+
+void MCTSSearcher::update(ExecutionState *current,
+                         const std::vector<ExecutionState *> &addedStates,
+                         const std::vector<ExecutionState *> &removedStates) {
+  //klee will use the selectState() to select one state and execute one instruction.
+
+  //1. when meet branch it will change the current state and fork a new state
+  //both of states I think as new states in MCTS
+
+  //2. when meet branch end it kill remove state from stucture
+  //I will denote this state "Terminated" in MCTS
+  //here is very slow
+
+  //if any change in the MCTS I need to refresh_tree() or just keep klee to explore most coverage node
+
+  if (addedStates.size() > 0){
+    // *aa << "mcts" << current << '\n';
+    if (current == tree.current->state){
+      tree.current->clean_node();
+    } else {
+      tree.delet_dead_node(current);
+    }
+    for (std::vector<ExecutionState *>::const_iterator it = addedStates.begin() ; it != addedStates.end(); ++it) {
+      add_child(*it);
+    }
+    if (current != NULL){
+      // if current at the root current, root null pointer don't have to keep in the MCTSTree
+      add_child(current);
+    } else {
+      firstState = *(addedStates.begin());
+    }
+    tree.refresh_tree(tree.current);
+  }
+  if (removedStates.size() > 0){
+    for (std::vector<ExecutionState *>::const_iterator it = removedStates.begin() ; it != removedStates.end(); ++it) {
+      // I do nothing here because I mark "change"
+      // If it has no child refresh_tree() will mark "Terminated" in MCTS
+      if (*it == tree.current->state){
+        tree.current->clean_node();
+        tree.refresh_tree(tree.current);
+      } else {
+        tree.delet_dead_node(*it);
+        tree.refresh_tree(tree.current);
+      }
+    }
+  }
+}
+
+void MCTSSearcher::add_child(ExecutionState *state){
+  double value =0;
+  bool cal_coverage = false;
+  bool cal_cost = false;
+  switch(type){
+  default:
+  case CoverageCP:
+  case Coverage:
+    cal_coverage = true;
+    if (type == Coverage)
+      break;
+  case CoveringNew:
+    cal_cost = true;
+  }
+  double coverage =0;
+  if (cal_coverage) {
+    double avgCount =0;
+    double totalCount =0;
+    int simulateTimes =10;
+    for (int times =0; times < simulateTimes; times++){
+      totalCount +=_simulate_future(state);
+    }
+    //*aa << state->pc->info->file << ' ' << state->pc->info->line << '\n';
+    avgCount = totalCount / simulateTimes;
+    coverage = avgCount;
+  }
+  uint64_t md2u =0;
+  int pastCovNew =0;
+  if (cal_cost) {
+      md2u = computeMinDistToUncovered(state->pc,
+                                            state->stack.back().minDistToUncoveredOnReturn);
+
+      pastCovNew = std::max(1, (int) state->instsSinceCovNew - 1000);
+  }
+  switch(type){
+  default:
+  case CoverageCP:
+  case Coverage:
+    // TODO: cal coverage as MCTS-AMAF
+    if (type == Coverage){
+      value = coverage;
+      break;
+    }
+  case CoveringNew:
+    if (type == CoveringNew){
+      double invMD2U = 1. / (md2u ? md2u : 10000);
+      double invCovNew = 0.;
+      if (state->instsSinceCovNew)
+        invCovNew = 1. / pastCovNew;
+
+      double invCost = (invCovNew * invCovNew + invMD2U * invMD2U);
+      value = invCost;
+      break;
+    } else {
+      int cost = (md2u + pastCovNew) ? (md2u + pastCovNew) : 1;
+      value = coverage / cost;
+      break;
+    }
+  }
+  tree.add_child(state, "", value);
+}
+
+int MCTSSearcher::_simulate_future (ExecutionState *state){
+  // traverse in this function first, use basic block
+  // then go in into function call, use call instruction
+  int count =500;
+  std::set<BasicBlock*> bbset;
+  std::map<BasicBlock*, int> bbmap;
+  std::set<BasicBlock*> bbqueue;
+  BasicBlock *bb = state->pc->inst->getParent();
+  bbqueue.insert(bb);
+  while (bbqueue.size() != 0 && count >= 0){
+    bb = *(bbqueue.begin());
+    bbqueue.erase(bbqueue.begin());
+    while (bb != NULL && count >= 0){
+      // new BasicBlock come in
+      bbset.insert(bb);
+      if (!bbmap[bb])
+	      bbmap[bb] = count/2;
+
+      //check if have function call
+      for (BasicBlock::iterator BI=bb->begin(),BE=bb->end(); BI!=BE; BI++) {
+        Instruction* inst = BI;
+        if (isa<CallInst>(inst)) {
+          CallInst* ci = (CallInst*) inst;
+          if (ci->getCalledFunction()!=NULL) {
+            Function *fc = ci->getCalledFunction();
+            if (fc->size() > 0){
+              Function::iterator FI=fc->begin();
+              BasicBlock *newbb = FI;
+              bbqueue.insert(newbb);
+            }
+          }
+        }
+      }
+
+      // traverse in this function
+      const TerminatorInst* TInst = bb->getTerminator();
+      if (TInst == NULL){
+        continue;
+      }
+      if (TInst->getNumSuccessors() > 0){
+        // chose random successor to simulate
+        int chosePath = theRNG.getInt32() % (TInst->getNumSuccessors());
+        bb = TInst->getSuccessor(chosePath);
+      } else {
+        // no successor, the end
+        break;
+      }
+      count--;
+    }
+  }
+  std::set<BasicBlock*> newbbset;
+  std::set_difference(bbset.begin(), bbset.end(), executor.bbset.begin(), executor.bbset.end(), std::inserter(newbbset, newbbset.begin()));
+
+  int traversedCount = bbset.size();
+  int newTraversedCount = newbbset.size();
+
+  for (std::set<BasicBlock*>::iterator bi = newbbset.begin(); bi != newbbset.end(); bi++){
+    newTraversedCount +=bbmap[*bi];
+  }
+  //*aa << "traversedCount " << traversedCount << '\n';
+  //*aa << "newTraversedCount " << newTraversedCount << '\n';
+  return newTraversedCount;
+}
+
+namespace klee {
+MCTSTree::MCTSTree () {
+	this->root = new MCTSNode(NULL, 0, NULL, "Root");
+	this->current = this->root;
+	this->root->type = "Visited";
+}
+
+void MCTSTree::__bfs (MCTSNode* tnode, int depth) {
+        //this __bfs is use as count all live node
+	if (tnode == NULL or tnode->child.empty())
+		return;
+	for (MCTSNode::MCTSNodeVector::iterator it = tnode->child.begin() ; it != tnode->child.end(); ++it)
+		this->count_node(*it, depth+1);
+	for (MCTSNode::MCTSNodeVector::iterator it = tnode->child.begin() ; it != tnode->child.end(); ++it)
+		this->__bfs(*it, depth+1);
+}
+
+void MCTSTree::__bfs (MCTSNode* tnode, ExecutionState* state) {
+	//this __bfs is use as delete specified node
+	if (tnode == NULL || tnode->child.empty())
+		return;
+	for (MCTSNode::MCTSNodeVector::iterator it = tnode->child.begin() ; it != tnode->child.end(); ++it)
+		if (this->delet_node(*it, state))
+			return;
+	for (MCTSNode::MCTSNodeVector::iterator it = tnode->child.begin() ; it != tnode->child.end(); ++it)
+		this->__bfs(*it, state);
+}
+
+MCTSNode* MCTSTree::select_node() {
+	//從MCTSTree中挑選最好的Node (TreePolicy)
+	MCTSNode* node = this->root;
+	while (!node->is_terminated()) {
+		if (node->is_expandable()) {
+			this->current = node;
+			return node;
+		} else {
+			node = node->best_child(1/sqrt(2));
+			// print "Pick: %s" % node.data
+		}
+	}
+	return NULL;
+}
+
+void MCTSTree::add_child(ExecutionState* state, std::string data, double coverage) {
+	//加入child到current selected node中
+	if (this->current != NULL)
+		this->current->child.push_back(new MCTSNode(this->current, coverage, state, data));
+}
+
+void MCTSTree::refresh_tree(MCTSNode* tnode) {
+	//更新current node的狀態
+	while (tnode != NULL) {
+		tnode->refresh_coverage();
+		tnode = tnode->parent;
+	}
+}
+
+void MCTSTree::count_node(MCTSNode* tnode, int depth) {
+	if (tnode->is_expandable())
+		this->live_count += 1;
+}
+
+int MCTSTree::count_living_node() {
+	this->live_count = 0;
+	this->__bfs(this->root,0);
+	return this->live_count;
+}
+
+bool MCTSTree::delet_node(MCTSNode* tnode, ExecutionState* state) {
+	if (tnode->is_expandable() && tnode->state == state) {
+		this->current = tnode;
+		tnode->clean_node();
+		return true;
+        }
+	return false;
+}
+
+void MCTSTree::delet_dead_node(ExecutionState* state) {
+        this->__bfs(this->root, state);
+}
+
+MCTSNode::MCTSNode (MCTSNode* parent, int coverage, ExecutionState* state, std::string data) {
+	this->parent = parent;
+	this->coverage = coverage;
+
+	this->state = state;
+	this->data = data;
+	this->type = "Expandable";
+	this->visit = 0;
+}
+
+bool MCTSNode::is_expandable () {
+	return this->type == "Expandable";
+}
+
+bool MCTSNode::is_terminated () {
+	//this node and its child is all been traverse
+	// and denote this by its child
+	return this->type == "Terminated";
+}
+
+void MCTSNode::refresh_coverage () {
+	//calculate average coverage from children
+	this->visit++;
+	if (this->child.size() != 0) {
+		double _sum =0;
+		bool somebody_alive = false;
+		for (MCTSNodeVector::iterator it = this->child.begin() ; it != child.end(); ++it) {
+			MCTSNode* child = *it;
+			_sum += child->coverage;
+			if (!child->is_terminated())
+				somebody_alive = true;
+		}
+		this->coverage = _sum / (double)(this->child.size());
+		this->type = somebody_alive ? "Visited" : "Terminated";
+	} else {
+		this->coverage =0;
+		this->type = "Terminated";
+	}
+}
+
+MCTSNode* MCTSNode::best_child (float c) {
+	double max_child_val = -1;
+	MCTSNode* max_child = NULL;
+	double max_coverage = 1;
+	for (MCTSNodeVector::iterator it = this->child.begin() ; it != child.end(); ++it) {
+		MCTSNode* child = *it;
+		if (max_coverage < child->coverage)
+			max_coverage = (child->coverage);
+	}
+	for (MCTSNodeVector::iterator it = this->child.begin() ; it != child.end(); ++it) {
+		MCTSNode* child = *it;
+		if (child->is_terminated())
+			continue;
+		// float val = child->visit != 0 ? (child->coverage/float(max_coverage) + c * sqrt(2 * log10(child->visit) / float(child->visit))) : 999999;
+		// I make some change here, because the origin equation will select first non-traverse child node when one of child node are never trsverse.
+		// The origin way do MCTS in the most of tree, but do bfs at leaf node.
+		float val = (child->visit != 0) ? (child->coverage/float(max_coverage) + c * sqrt(2 * log10(child->visit) / float(child->visit))) : (child->coverage/float(max_coverage) + 100);
+		if (val > max_child_val){
+			max_child_val = val;
+			max_child = child;
+		}
+	}
+	return max_child;
+}
+void MCTSNode::clean_node () {
+	this->state = NULL;
+	this->data = "";
+	if (this->is_expandable())
+		this->type = "Visited";
+}
+
+}

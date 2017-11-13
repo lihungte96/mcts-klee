@@ -18,6 +18,12 @@
 #include "../../lib/Core/AddressSpace.h"
 #include "klee/Internal/Module/KInstIterator.h"
 
+#if LLVM_VERSION_CODE >= LLVM_VERSION(3, 3)
+#include "llvm/IR/BasicBlock.h"
+#else
+#include "llvm/BasicBlock.h"
+#endif
+
 #include <map>
 #include <set>
 #include <vector>
@@ -140,6 +146,9 @@ public:
 
   /// @brief Set of used array names for this state.  Used to avoid collisions.
   std::set<std::string> arrayNames;
+
+  /// @brief Pointer to the basic block of the current state
+  llvm::BasicBlock* bb;
 
   std::string getFnAlias(std::string fn);
   void addFnAlias(std::string old_fn, std::string new_fn);
